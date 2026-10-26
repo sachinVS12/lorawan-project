@@ -1,7 +1,3 @@
-/**
- * ChirpStack v4 LoRaWAN uplink subscriber
- * Subscribes to: application/<appId>/device/+/event/up
- */
 require("dotenv").config();
 const mqtt = require("mqtt");
 const fs = require("fs");
@@ -57,6 +53,151 @@ const deviceNames = {
   "50c6c10d19c40cce": "mohan",
   "82eb41899b9c98d1": "lucky",
 };
+
+// ─── Chunked-dataset devices (STM32 node sending the 2096-sample table) ───
+// Packet layout (FPort 2):
+//   type 1 = data chunk : [type 1B][total size 2B BE][offset 2B BE][length 2B BE][samples, 16-bit LITTLE-endian]
+//   type 2 = probe      : [type 1B]... data-rate test, no samples
+const CHUNK_DEVICES = new Set([
+  "50c6c10d19c40cce", // mohan
+]);
+const CHUNK_HEADER_SIZE = 7;
+const chunkSessions = {}; // devEui -> { total, buf, filled, received, packets }
+
+function decodeChunkPacket(devEui, fPort, b64) {
+  const buf = Buffer.from(b64, "base64");
+  const hex = buf.toString("hex");
+
+  if (fPort !== 2) return { error: `Unhandled FPort ${fPort}`, hex };
+  if (buf.length < 2) return { error: "Payload too short", hex };
+
+  const type = buf[0];
+
+  // Probe packet (data-rate test): "02 <DR>" or "02 00 00 00 00 00 01 <DR>"
+  if (type === 2) {
+    const dataRate = buf.length >= 8 ? buf[7] : buf[1];
+    return { kind: "probe", type, dataRate, hex };
+  }
+
+  if (type !== 1 || buf.length < CHUNK_HEADER_SIZE) {
+    return { error: `Unknown packet (type ${type}, ${buf.length} bytes)`, hex };
+  }
+
+  // ---- 7-byte chunk header (big-endian) ----
+  const total  = buf.readUInt16BE(1);
+  const offset = buf.readUInt16BE(3);
+  const length = buf.readUInt16BE(5);
+  const data   = buf.subarray(CHUNK_HEADER_SIZE);
+
+  if (data.length !== length) {
+    return { error: `Length mismatch: header says ${length}, packet has ${data.length}`, hex };
+  }
+  if (offset + length > total) {
+    return { error: `Chunk outside dataset (offset ${offset} + length ${length} > total ${total})`, hex };
+  }
+
+  // ---- samples inside THIS chunk (16-bit little-endian) ----
+  const chunkSamples = [];
+  for (let i = 0; i + 1 < data.length; i += 2) chunkSamples.push(data.readUInt16LE(i));
+
+  // ---- collect chunks per device until the whole dataset has arrived ----
+  let s = chunkSessions[devEui];
+  let previousIncomplete = false;
+  if (!s || s.total !== total || (offset === 0 && s.filled[0] === 1)) {
+    previousIncomplete = !!s && s.received < s.total;
+    s = chunkSessions[devEui] = {
+      total,
+      buf: Buffer.alloc(total),
+      filled: new Uint8Array(total),
+      received: 0,
+      packets: 0,
+    };
+  }
+
+  data.copy(s.buf, offset);
+  let newBytes = 0;
+  for (let i = 0; i < length; i++) {
+    if (!s.filled[offset + i]) { s.filled[offset + i] = 1; newBytes++; }
+  }
+  s.received += newBytes;
+  if (newBytes > 0) s.packets++;
+  const duplicate = newBytes === 0; // a resent chunk (same offset) just overwrites
+
+  const complete = s.received >= s.total;
+  const result = {
+    kind: complete ? "dataset" : "chunk",
+    header: {
+      hex: buf.subarray(0, CHUNK_HEADER_SIZE).toString("hex"),
+      type,
+      total,
+      offset,
+      length,
+    },
+    chunkSamples,
+    chunksReceived: s.packets,
+    receivedBytes: s.received,
+    totalBytes: s.total,
+    duplicate,
+    previousIncomplete,
+    battery: null, // not sent by the node yet
+    hex,
+  };
+
+  if (complete) {
+    const samples = [];
+    for (let i = 0; i + 1 < s.total; i += 2) samples.push(s.buf.readUInt16LE(i));
+    result.samples = samples;
+    result.sampleCount = samples.length;
+    result.min = Math.min(...samples);
+    result.max = Math.max(...samples);
+    result.avg = Number((samples.reduce((a, b) => a + b, 0) / samples.length).toFixed(2));
+    delete chunkSessions[devEui];
+  }
+  return result;
+}
+
+function printChunkResult(deviceName, devEui, r) {
+  const line = "━".repeat(63);
+
+  if (r.error) {
+    console.log(`Decode error  : ${r.error}`);
+    return;
+  }
+
+  if (r.kind === "probe") {
+    console.log(`Probe packet  : data-rate test at DR${r.dataRate} (no samples, ignored)`);
+    return;
+  }
+
+  const hdrHex = r.header.hex.match(/../g).join(" ");
+  console.log(line);
+  console.log(`📦 CHUNK RECEIVED - ${deviceName} (${devEui})`);
+  console.log(line);
+  console.log(`HEADER (7 B)  : ${hdrHex}`);
+  console.log(`  Type        : ${r.header.type} (data chunk)`);
+  console.log(`  Total size  : ${r.header.total} bytes (${r.header.total / 2} samples)`);
+  console.log(`  Offset      : ${r.header.offset}`);
+  console.log(`  Length      : ${r.header.length} bytes (${r.header.length / 2} samples)`);
+  console.log(`Battery       : N/A (not sent by node yet)`);
+  console.log(`Chunk samples : [${r.chunkSamples.join(", ")}]`);
+  console.log(
+    `Progress      : ${r.receivedBytes}/${r.totalBytes} bytes, ${r.chunksReceived} chunk(s)` +
+      (r.duplicate ? "  (duplicate chunk, ignored)" : ""),
+  );
+  if (r.previousIncomplete) {
+    console.log(`⚠️  Previous dataset was incomplete and has been discarded`);
+  }
+
+  if (r.kind === "dataset") {
+    console.log(line);
+    console.log(`✅ DATASET COMPLETE - ${deviceName} (${devEui})`);
+    console.log(line);
+    console.log(`Samples       : ${r.sampleCount}`);
+    console.log(`Stats         : min=${r.min} | max=${r.max} | avg=${r.avg}`);
+    console.log(`All Samples   : [${r.samples.join(", ")}]`);
+  }
+  console.log(line);
+}
 
 // ─── RAK5146 / WisBlock FPort-2 decoder ──────────────────
 function decodeRak5146(fPort, b64) {
@@ -152,6 +293,23 @@ function broadcastSensorData(data) {
   });
 }
 
+// Broadcast console logs to all connected WebSocket clients
+function broadcastLog(message) {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ type: 'log', message }));
+    }
+  });
+}
+
+// Override console.log to also broadcast to WebSocket
+const originalLog = console.log;
+console.log = function(...args) {
+  originalLog.apply(console, args);
+  const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+  broadcastLog(message);
+};
+
 console.log("🌐 WebSocket server initialized");
 
 // ─── MQTT client ─────────────────────────────────────────
@@ -197,7 +355,11 @@ client.on("message", (receivedTopic, message) => {
 
     // Decode payload if FPort 2
     let decodedPayload = null;
-    if (data.data && data.fPort != null) {
+    if (data.data && data.fPort != null && CHUNK_DEVICES.has(devEui)) {
+      // Chunked-dataset device: 7-byte header + little-endian samples
+      decodedPayload = decodeChunkPacket(devEui, data.fPort, data.data);
+      printChunkResult(deviceName, devEui, decodedPayload);
+    } else if (data.data && data.fPort != null) {
       decodedPayload = decodeRak5146(data.fPort, data.data);
       if (decodedPayload.error) {
         console.log(`Decode error  : ${decodedPayload.error}`);

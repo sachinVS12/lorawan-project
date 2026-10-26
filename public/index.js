@@ -83,6 +83,170 @@ function SimpleLineChart({ data, dataKey, color, title }) {
     );
 }
 
+function PayloadSamplesHistoryChart({ payloadHistory }) {
+    if (!payloadHistory || payloadHistory.length === 0) {
+        return (
+            <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
+                No payload data yet. Waiting for sensor messages...
+            </div>
+        );
+    }
+
+    // Flatten all samples with gaps between payloads
+    // Add null values as gaps between payloads
+    const gapSize = 10; // Number of null points to insert as gap
+    const allSamples = [];
+    const sampleInfo = []; // Track which payload each sample belongs to
+
+    payloadHistory.forEach((payload, payloadIndex) => {
+        const samples = payload.samples || [];
+        samples.forEach((sample, sampleIndex) => {
+            allSamples.push(sample);
+            sampleInfo.push({
+                payloadIndex,
+                sampleIndex,
+                isStart: sampleIndex === 0,
+                isEnd: sampleIndex === samples.length - 1,
+                time: payload.time,
+                isChunk: payload.isChunk || false,
+                progress: payload.progress || null
+            });
+        });
+        // Add gap after each payload (except the last one)
+        if (payloadIndex < payloadHistory.length - 1) {
+            for (let i = 0; i < gapSize; i++) {
+                allSamples.push(null);
+                sampleInfo.push({ isGap: true });
+            }
+        }
+    });
+
+    if (allSamples.length === 0) {
+        return (
+            <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
+                No samples in history.
+            </div>
+        );
+    }
+
+    const width = 1200;
+    const height = 400;
+    const padding = 50;
+    const chartWidth = width - padding * 2;
+    const chartHeight = height - padding * 2;
+
+    // Calculate min/max from non-null samples
+    const validSamples = allSamples.filter(s => s !== null);
+    const minVal = validSamples.length ? Math.min(...validSamples) : 0;
+    const maxVal = validSamples.length ? Math.max(...validSamples) : 100;
+    const range = maxVal - minVal || 1;
+
+    // Calculate points for the line
+    const points = allSamples.map((val, i) => {
+        const x = padding + (i / (allSamples.length - 1 || 1)) * chartWidth;
+        const y = val !== null ? padding + chartHeight - ((val - minVal) / range) * chartHeight : null;
+        return { x, y, val, index: i, info: sampleInfo[i] };
+    });
+
+    // Build polylines (split at gaps)
+    const polylines = [];
+    let currentLine = [];
+    points.forEach(p => {
+        if (p.y !== null) {
+            currentLine.push(`${p.x},${p.y}`);
+        } else {
+            if (currentLine.length > 0) {
+                polylines.push(currentLine.join(' '));
+                currentLine = [];
+            }
+        }
+    });
+    if (currentLine.length > 0) {
+        polylines.push(currentLine.join(' '));
+    }
+
+    const chunkCount = payloadHistory.filter(p => p.isChunk).length;
+    const completeCount = payloadHistory.filter(p => !p.isChunk).length;
+
+    return (
+        <div>
+            <div style={{ marginBottom: '10px', fontSize: '14px', color: '#666' }}>
+                Total: {payloadHistory.length} entries ({completeCount} complete, {chunkCount} chunks) | Total samples: {validSamples.length} | Gaps: {payloadHistory.length - 1}
+            </div>
+            <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
+                {/* Grid lines - horizontal */}
+                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => (
+                    <line
+                        key={`h-${p}`}
+                        x1={padding}
+                        y1={padding + p * chartHeight}
+                        x2={width - padding}
+                        y2={padding + p * chartHeight}
+                        stroke="#e0e0e0"
+                        strokeWidth="1"
+                    />
+                ))}
+                {/* Y-axis labels */}
+                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => {
+                    const val = maxVal - p * range;
+                    return (
+                        <text
+                            key={`yl-${p}`}
+                            x={padding - 10}
+                            y={padding + p * chartHeight + 5}
+                            textAnchor="end"
+                            fontSize="11"
+                            fill="#666"
+                        >
+                            {val.toFixed(0)}
+                        </text>
+                    );
+                })}
+                {/* Main lines (split at gaps) */}
+                {polylines.map((lineStr, i) => (
+                    <polyline
+                        key={`poly-${i}`}
+                        points={lineStr}
+                        fill="none"
+                        stroke="#ff6b6b"
+                        strokeWidth="1.5"
+                        strokeLinejoin="round"
+                        strokeLinecap="round"
+                    />
+                ))}
+                {/* Start markers (green circles for complete, orange for chunks) */}
+                {points.filter(p => p.info?.isStart).map((p, i) => (
+                    <circle
+                        key={`start-${i}`}
+                        cx={p.x}
+                        cy={p.y}
+                        r="5"
+                        fill={p.info.isChunk ? "#ff9800" : "#4caf50"}
+                        stroke="white"
+                        strokeWidth="2"
+                    />
+                ))}
+                {/* End markers (blue circles for complete, orange for chunks) */}
+                {points.filter(p => p.info?.isEnd).map((p, i) => (
+                    <circle
+                        key={`end-${i}`}
+                        cx={p.x}
+                        cy={p.y}
+                        r="5"
+                        fill={p.info.isChunk ? "#ff9800" : "#2196f3"}
+                        stroke="white"
+                        strokeWidth="2"
+                    />
+                ))}
+                {/* Legend */}
+                <text x={padding} y={height - 10} fontSize="12" fill="#666">
+                    <tspan fill="#4caf50">●</tspan> Complete Start <tspan dx="5" fill="#2196f3">●</tspan> Complete End <tspan dx="5" fill="#ff9800">●</tspan> Chunk
+                </text>
+            </svg>
+        </div>
+    );
+}
+
 function PayloadSamplesChart({ payloadHistory }) {
     if (!payloadHistory || payloadHistory.length === 0) {
         return (
@@ -227,10 +391,10 @@ function App() {
     const [sensorData, setSensorData] = useState(null);
     const [rssiHistory, setRssiHistory] = useState([]);
     const [snrHistory, setSnrHistory] = useState([]);
-    const [payloadAvgHistory, setPayloadAvgHistory] = useState([]);
     const [payloadHistory, setPayloadHistory] = useState([]);
     const [error, setError] = useState(null);
     const [messageCount, setMessageCount] = useState(0);
+    const [logs, setLogs] = useState([]);
 
     useEffect(() => {
         console.log('Initializing WebSocket connection...');
@@ -246,6 +410,16 @@ function App() {
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                
+                // Handle log messages
+                if (data.type === 'log') {
+                    setLogs(prev => {
+                        const newLogs = [...prev, { message: data.message, timestamp: new Date().toLocaleTimeString() }];
+                        return newLogs.slice(-200); // Keep last 200 logs
+                    });
+                    return;
+                }
+                
                 console.log('Received data:', data);
                 setSensorData(data);
                 setMessageCount(prev => prev + 1);
@@ -266,32 +440,61 @@ function App() {
                 });
 
                 // Update payload history if decoded payload exists
-                if (data.decodedPayload && data.decodedPayload.samples) {
-                    setPayloadHistory(prev => {
-                        const newHistory = [...prev, {
-                            time: timestamp,
-                            samples: data.decodedPayload.samples,
-                            avg: data.decodedPayload.avg,
-                            min: data.decodedPayload.min,
-                            max: data.decodedPayload.max,
-                            battery: data.decodedPayload.batteryV
-                        }];
-                        console.log('Payload history:', newHistory);
-                        return newHistory.slice(-100);
-                    });
-
-                    // Track average values over time for continuous plotting
-                    setPayloadAvgHistory(prev => {
-                        const newHistory = [...prev, {
-                            time: timestamp,
-                            avg: data.decodedPayload.avg,
-                            min: data.decodedPayload.min,
-                            max: data.decodedPayload.max,
-                            battery: data.decodedPayload.batteryV
-                        }];
-                        console.log('Payload avg history:', newHistory);
-                        return newHistory.slice(-100);
-                    });
+                if (data.decodedPayload) {
+                    // Handle chunked-dataset format - add chunks as they arrive
+                    if (data.decodedPayload.kind === 'chunk' && data.decodedPayload.chunkSamples) {
+                        setPayloadHistory(prev => {
+                            const newHistory = [...prev, {
+                                time: timestamp,
+                                samples: data.decodedPayload.chunkSamples,
+                                avg: null, // No avg for partial chunk
+                                min: Math.min(...data.decodedPayload.chunkSamples),
+                                max: Math.max(...data.decodedPayload.chunkSamples),
+                                battery: data.decodedPayload.battery || 'N/A',
+                                isChunk: true,
+                                progress: `${data.decodedPayload.receivedBytes}/${data.decodedPayload.totalBytes} bytes`
+                            }];
+                            console.log('Payload history (chunk):', newHistory);
+                            return newHistory.slice(-100);
+                        });
+                    }
+                    // Handle complete dataset (replace last chunk or add as new)
+                    else if (data.decodedPayload.kind === 'dataset' && data.decodedPayload.samples) {
+                        setPayloadHistory(prev => {
+                            // Remove the chunks that belong to this dataset and add the complete one
+                            const newHistory = [...prev];
+                            // Keep only non-chunk entries or chunks from other datasets
+                            const filtered = newHistory.filter(p => !p.isChunk);
+                            const completeEntry = {
+                                time: timestamp,
+                                samples: data.decodedPayload.samples,
+                                avg: data.decodedPayload.avg,
+                                min: data.decodedPayload.min,
+                                max: data.decodedPayload.max,
+                                battery: data.decodedPayload.battery || 'N/A',
+                                isChunk: false
+                            };
+                            filtered.push(completeEntry);
+                            console.log('Payload history (dataset complete):', filtered);
+                            return filtered.slice(-100);
+                        });
+                    }
+                    // Handle RAK5146 format
+                    else if (data.decodedPayload.samples) {
+                        setPayloadHistory(prev => {
+                            const newHistory = [...prev, {
+                                time: timestamp,
+                                samples: data.decodedPayload.samples,
+                                avg: data.decodedPayload.avg,
+                                min: data.decodedPayload.min,
+                                max: data.decodedPayload.max,
+                                battery: data.decodedPayload.batteryV,
+                                isChunk: false
+                            }];
+                            console.log('Payload history (RAK5146):', newHistory);
+                            return newHistory.slice(-100);
+                        });
+                    }
                 }
             } catch (err) {
                 console.error('Error parsing message:', err);
@@ -324,7 +527,7 @@ function App() {
                 </h1>
                 {error && <div style={{ color: 'red', marginTop: '10px', fontSize: '14px' }}>Error: {error}</div>}
                 <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                    Messages received: {messageCount} | RSSI points: {rssiHistory.length} | SNR points: {snrHistory.length} | Payload avg points: {payloadAvgHistory.length} | Latest samples: {payloadHistory.length > 0 ? payloadHistory[payloadHistory.length - 1]?.samples?.length : 0}
+                    Messages received: {messageCount} | RSSI points: {rssiHistory.length} | SNR points: {snrHistory.length} | Payloads: {payloadHistory.length} | Total samples: {payloadHistory.reduce((sum, p) => sum + (p.samples?.length || 0), 0)}
                 </div>
             </div>
 
@@ -392,13 +595,39 @@ function App() {
             </div>
 
             <div className="chart-container" style={{ marginTop: '20px' }}>
-                <h2>Payload Average Value History</h2>
-                <SimpleLineChart data={payloadAvgHistory} dataKey="avg" color="#ff6b6b" />
+                <h2>Payload Samples History (with gaps)</h2>
+                <PayloadSamplesHistoryChart payloadHistory={payloadHistory} />
             </div>
 
             <div className="chart-container" style={{ marginTop: '20px' }}>
                 <h2>Payload Samples (Latest)</h2>
                 <PayloadSamplesChart payloadHistory={payloadHistory} />
+            </div>
+
+            <div className="chart-container" style={{ marginTop: '20px' }}>
+                <h2>Server Console Logs</h2>
+                <div style={{ 
+                    backgroundColor: '#1e1e1e', 
+                    color: '#d4d4d4', 
+                    padding: '15px', 
+                    borderRadius: '5px', 
+                    fontFamily: 'monospace', 
+                    fontSize: '12px',
+                    maxHeight: '400px',
+                    overflowY: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all'
+                }}>
+                    {logs.length === 0 ? (
+                        <div style={{ color: '#666' }}>Waiting for logs...</div>
+                    ) : (
+                        logs.map((log, i) => (
+                            <div key={i} style={{ marginBottom: '2px' }}>
+                                <span style={{ color: '#888' }}>[{log.timestamp}]</span> {log.message}
+                            </div>
+                        ))
+                    )}
+                </div>
             </div>
         </div>
     );
