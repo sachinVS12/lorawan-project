@@ -92,8 +92,8 @@ function PayloadSamplesHistoryChart({ payloadHistory }) {
         );
     }
 
-    // Flatten all samples with gaps between payloads
-    // Add null values as gaps between payloads
+    // Flatten all samples with gaps only between complete datasets
+    // Chunks from the same dataset are continuous (no gaps)
     const gapSize = 10; // Number of null points to insert as gap
     const allSamples = [];
     const sampleInfo = []; // Track which payload each sample belongs to
@@ -112,8 +112,8 @@ function PayloadSamplesHistoryChart({ payloadHistory }) {
                 progress: payload.progress || null
             });
         });
-        // Add gap after each payload (except the last one)
-        if (payloadIndex < payloadHistory.length - 1) {
+        // Add gap after complete datasets (not after chunks)
+        if (!payload.isChunk && payloadIndex < payloadHistory.length - 1) {
             for (let i = 0; i < gapSize; i++) {
                 allSamples.push(null);
                 sampleInfo.push({ isGap: true });
@@ -167,11 +167,12 @@ function PayloadSamplesHistoryChart({ payloadHistory }) {
 
     const chunkCount = payloadHistory.filter(p => p.isChunk).length;
     const completeCount = payloadHistory.filter(p => !p.isChunk).length;
+    const gapCount = payloadHistory.filter((p, i) => !p.isChunk && i < payloadHistory.length - 1).length;
 
     return (
         <div>
             <div style={{ marginBottom: '10px', fontSize: '14px', color: '#666' }}>
-                Total: {payloadHistory.length} entries ({completeCount} complete, {chunkCount} chunks) | Total samples: {validSamples.length} | Gaps: {payloadHistory.length - 1}
+                Total: {payloadHistory.length} entries ({completeCount} complete, {chunkCount} chunks) | Total samples: {validSamples.length} | Gaps: {gapCount}
             </div>
             <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
                 {/* Grid lines - horizontal */}
@@ -396,6 +397,36 @@ function App() {
     const [messageCount, setMessageCount] = useState(0);
     const [logs, setLogs] = useState([]);
 
+    // Export payload history to CSV (Excel-compatible)
+    const exportToExcel = () => {
+        if (!payloadHistory || payloadHistory.length === 0) {
+            alert('No payload data to export');
+            return;
+        }
+
+        let csvContent = 'Timestamp,Entry Type,Average,Min,Max,Battery,Sample Index,Sample Value\n';
+
+        payloadHistory.forEach((payload, payloadIndex) => {
+            const entryType = payload.isChunk ? 'Chunk' : 'Complete';
+            const samples = payload.samples || [];
+            
+            samples.forEach((sample, sampleIndex) => {
+                csvContent += `${payload.time},${entryType},${payload.avg || ''},${payload.min},${payload.max},${payload.battery || ''},${sampleIndex},${sample}\n`;
+            });
+        });
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        
+        link.setAttribute('href', url);
+        link.setAttribute('download', `payload_history_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     useEffect(() => {
         console.log('Initializing WebSocket connection...');
         console.log('Host:', window.location.host);
@@ -595,7 +626,24 @@ function App() {
             </div>
 
             <div className="chart-container" style={{ marginTop: '20px' }}>
-                <h2>Payload Samples History (with gaps)</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <h2 style={{ margin: 0 }}>Payload Samples History (with gaps)</h2>
+                    <button 
+                        onClick={exportToExcel}
+                        style={{
+                            padding: '8px 16px',
+                            backgroundColor: '#4CAF50',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            fontWeight: 'bold'
+                        }}
+                    >
+                        Export to Excel
+                    </button>
+                </div>
                 <PayloadSamplesHistoryChart payloadHistory={payloadHistory} />
             </div>
 
