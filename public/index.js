@@ -84,6 +84,8 @@ function SimpleLineChart({ data, dataKey, color, title }) {
 }
 
 function PayloadSamplesHistoryChart({ payloadHistory }) {
+    const [hoverData, setHoverData] = useState(null);
+
     if (!payloadHistory || payloadHistory.length === 0) {
         return (
             <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
@@ -169,86 +171,186 @@ function PayloadSamplesHistoryChart({ payloadHistory }) {
     const completeCount = payloadHistory.filter(p => !p.isChunk).length;
     const gapCount = payloadHistory.filter((p, i) => !p.isChunk && i < payloadHistory.length - 1).length;
 
+    // Handle mouse move for tooltip
+    const handleMouseMove = (e) => {
+        const svg = e.currentTarget;
+        const rect = svg.getBoundingClientRect();
+        const scaleX = width / rect.width;
+        const scaleY = height / rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX;
+        const mouseY = (e.clientY - rect.top) * scaleY;
+
+        // Find closest point
+        let closestPoint = null;
+        let minDist = Infinity;
+
+        points.forEach(p => {
+            if (p.y !== null) {
+                const dist = Math.abs(p.x - mouseX);
+                if (dist < minDist && dist < 20) {
+                    minDist = dist;
+                    closestPoint = p;
+                }
+            }
+        });
+
+        if (closestPoint) {
+            setHoverData({
+                x: closestPoint.x,
+                y: closestPoint.y,
+                value: closestPoint.val,
+                info: closestPoint.info,
+                screenX: e.clientX,
+                screenY: e.clientY
+            });
+        } else {
+            setHoverData(null);
+        }
+    };
+
+    const handleMouseLeave = () => {
+        setHoverData(null);
+    };
+
     return (
         <div>
             <div style={{ marginBottom: '10px', fontSize: '14px', color: '#666' }}>
                 Total: {payloadHistory.length} entries ({completeCount} complete, {chunkCount} chunks) | Total samples: {validSamples.length} | Gaps: {gapCount}
+                {hoverData && <span style={{ marginLeft: '15px', color: '#ff6b6b', fontWeight: 'bold' }}>Hovered Value: {hoverData.value}</span>}
             </div>
-            <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
-                {/* Grid lines - horizontal */}
-                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => (
-                    <line
-                        key={`h-${p}`}
-                        x1={padding}
-                        y1={padding + p * chartHeight}
-                        x2={width - padding}
-                        y2={padding + p * chartHeight}
-                        stroke="#e0e0e0"
-                        strokeWidth="1"
-                    />
-                ))}
-                {/* Y-axis labels */}
-                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => {
-                    const val = maxVal - p * range;
-                    return (
-                        <text
-                            key={`yl-${p}`}
-                            x={padding - 10}
-                            y={padding + p * chartHeight + 5}
-                            textAnchor="end"
-                            fontSize="11"
-                            fill="#666"
-                        >
-                            {val.toFixed(0)}
-                        </text>
-                    );
-                })}
-                {/* Main lines (split at gaps) */}
-                {polylines.map((lineStr, i) => (
-                    <polyline
-                        key={`poly-${i}`}
-                        points={lineStr}
-                        fill="none"
-                        stroke="#ff6b6b"
-                        strokeWidth="1.5"
-                        strokeLinejoin="round"
-                        strokeLinecap="round"
-                    />
-                ))}
-                {/* Start markers (green circles for complete, orange for chunks) */}
-                {points.filter(p => p.info?.isStart).map((p, i) => (
-                    <circle
-                        key={`start-${i}`}
-                        cx={p.x}
-                        cy={p.y}
-                        r="5"
-                        fill={p.info.isChunk ? "#ff9800" : "#4caf50"}
-                        stroke="white"
-                        strokeWidth="2"
-                    />
-                ))}
-                {/* End markers (blue circles for complete, orange for chunks) */}
-                {points.filter(p => p.info?.isEnd).map((p, i) => (
-                    <circle
-                        key={`end-${i}`}
-                        cx={p.x}
-                        cy={p.y}
-                        r="5"
-                        fill={p.info.isChunk ? "#ff9800" : "#2196f3"}
-                        stroke="white"
-                        strokeWidth="2"
-                    />
-                ))}
-                {/* Legend */}
-                <text x={padding} y={height - 10} fontSize="12" fill="#666">
-                    <tspan fill="#4caf50">●</tspan> Complete Start <tspan dx="5" fill="#2196f3">●</tspan> Complete End <tspan dx="5" fill="#ff9800">●</tspan> Chunk
-                </text>
-            </svg>
+            <div style={{ position: 'relative' }}>
+                <svg 
+                    width="100%" 
+                    height={height} 
+                    viewBox={`0 0 ${width} ${height}`} 
+                    style={{ overflow: 'visible' }}
+                    onMouseMove={handleMouseMove}
+                    onMouseLeave={handleMouseLeave}
+                >
+                    {/* Grid lines - horizontal */}
+                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => (
+                        <line
+                            key={`h-${p}`}
+                            x1={padding}
+                            y1={padding + p * chartHeight}
+                            x2={width - padding}
+                            y2={padding + p * chartHeight}
+                            stroke="#e0e0e0"
+                            strokeWidth="1"
+                        />
+                    ))}
+                    {/* Y-axis labels */}
+                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => {
+                        const val = maxVal - p * range;
+                        return (
+                            <text
+                                key={`yl-${p}`}
+                                x={padding - 10}
+                                y={padding + p * chartHeight + 5}
+                                textAnchor="end"
+                                fontSize="11"
+                                fill="#666"
+                            >
+                                {val.toFixed(0)}
+                            </text>
+                        );
+                    })}
+                    {/* Main lines (split at gaps) */}
+                    {polylines.map((lineStr, i) => (
+                        <polyline
+                            key={`poly-${i}`}
+                            points={lineStr}
+                            fill="none"
+                            stroke="#ff6b6b"
+                            strokeWidth="1.5"
+                            strokeLinejoin="round"
+                            strokeLinecap="round"
+                        />
+                    ))}
+                    {/* Start markers (green circles for complete, orange for chunks) */}
+                    {points.filter(p => p.info?.isStart).map((p, i) => (
+                        <circle
+                            key={`start-${i}`}
+                            cx={p.x}
+                            cy={p.y}
+                            r="5"
+                            fill={p.info.isChunk ? "#ff9800" : "#4caf50"}
+                            stroke="white"
+                            strokeWidth="2"
+                        />
+                    ))}
+                    {/* End markers (blue circles for complete, orange for chunks) */}
+                    {points.filter(p => p.info?.isEnd).map((p, i) => (
+                        <circle
+                            key={`end-${i}`}
+                            cx={p.x}
+                            cy={p.y}
+                            r="5"
+                            fill={p.info.isChunk ? "#ff9800" : "#2196f3"}
+                            stroke="white"
+                            strokeWidth="2"
+                        />
+                    ))}
+                    {/* Hover indicator line */}
+                    {hoverData && (
+                        <line
+                            x1={hoverData.x}
+                            y1={padding}
+                            x2={hoverData.x}
+                            y2={height - padding}
+                            stroke="#666"
+                            strokeWidth="1"
+                            strokeDasharray="4"
+                        />
+                    )}
+                    {/* Hover indicator circle */}
+                    {hoverData && (
+                        <circle
+                            cx={hoverData.x}
+                            cy={hoverData.y}
+                            r="6"
+                            fill="#ff6b6b"
+                            stroke="white"
+                            strokeWidth="2"
+                        />
+                    )}
+                    {/* Legend */}
+                    <text x={padding} y={height - 10} fontSize="12" fill="#666">
+                        <tspan fill="#4caf50">●</tspan> Complete Start <tspan dx="5" fill="#2196f3">●</tspan> Complete End <tspan dx="5" fill="#ff9800">●</tspan> Chunk
+                    </text>
+                </svg>
+                {/* Tooltip */}
+                {hoverData && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            left: hoverData.screenX + 15,
+                            top: hoverData.screenY - 10,
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            color: 'white',
+                            padding: '8px 12px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            pointerEvents: 'none',
+                            zIndex: 1000,
+                            whiteSpace: 'nowrap'
+                        }}
+                    >
+                        <div><strong>Value:</strong> {hoverData.value}</div>
+                        <div><strong>Time:</strong> {hoverData.info?.time}</div>
+                        <div><strong>Type:</strong> {hoverData.info?.isChunk ? 'Chunk' : 'Complete'}</div>
+                        <div><strong>Sample Index:</strong> {hoverData.info?.sampleIndex}</div>
+                        {hoverData.info?.progress && <div><strong>Progress:</strong> {hoverData.info.progress}</div>}
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
 
 function PayloadSamplesChart({ payloadHistory }) {
+    const [hoverData, setHoverData] = useState(null);
+
     if (!payloadHistory || payloadHistory.length === 0) {
         return (
             <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
@@ -291,98 +393,193 @@ function PayloadSamplesChart({ payloadHistory }) {
     const points = smoothedSamples.map((val, i) => {
         const x = padding + (i / (smoothedSamples.length - 1 || 1)) * chartWidth;
         const y = padding + chartHeight - ((val - minVal) / range) * chartHeight;
-        return { x, y, val, index: i };
+        return { x, y, val, index: i, originalVal: samples[i] };
     });
 
     const pointsString = points.map(p => `${p.x},${p.y}`).join(' ');
+
+    // Handle mouse move for tooltip
+    const handleMouseMove = (e) => {
+        const svg = e.currentTarget;
+        const rect = svg.getBoundingClientRect();
+        const scaleX = width / rect.width;
+        const scaleY = height / rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX;
+        const mouseY = (e.clientY - rect.top) * scaleY;
+
+        // Find closest point
+        let closestPoint = null;
+        let minDist = Infinity;
+
+        points.forEach(p => {
+            const dist = Math.abs(p.x - mouseX);
+            if (dist < minDist && dist < 20) {
+                minDist = dist;
+                closestPoint = p;
+            }
+        });
+
+        if (closestPoint) {
+            setHoverData({
+                x: closestPoint.x,
+                y: closestPoint.y,
+                value: closestPoint.originalVal,
+                smoothedValue: closestPoint.val,
+                index: closestPoint.index,
+                screenX: e.clientX,
+                screenY: e.clientY
+            });
+        } else {
+            setHoverData(null);
+        }
+    };
+
+    const handleMouseLeave = () => {
+        setHoverData(null);
+    };
 
     return (
         <div>
             <div style={{ marginBottom: '10px', fontSize: '14px', color: '#666' }}>
                 Latest payload: {samples.length} samples | Avg: {latestPayload.avg} | Min: {latestPayload.min} | Max: {latestPayload.max} | Battery: {latestPayload.battery}V
+                {hoverData && <span style={{ marginLeft: '15px', color: '#ff6b6b', fontWeight: 'bold' }}>Hovered Value: {hoverData.value}</span>}
             </div>
-            <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
-                {/* Grid lines - horizontal */}
-                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => (
-                    <line
-                        key={`h-${p}`}
-                        x1={padding}
-                        y1={padding + p * chartHeight}
-                        x2={width - padding}
-                        y2={padding + p * chartHeight}
-                        stroke="#e0e0e0"
-                        strokeWidth="1"
+            <div style={{ position: 'relative' }}>
+                <svg 
+                    width="100%" 
+                    height={height} 
+                    viewBox={`0 0 ${width} ${height}`} 
+                    style={{ overflow: 'visible' }}
+                    onMouseMove={handleMouseMove}
+                    onMouseLeave={handleMouseLeave}
+                >
+                    {/* Grid lines - horizontal */}
+                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => (
+                        <line
+                            key={`h-${p}`}
+                            x1={padding}
+                            y1={padding + p * chartHeight}
+                            x2={width - padding}
+                            y2={padding + p * chartHeight}
+                            stroke="#e0e0e0"
+                            strokeWidth="1"
+                        />
+                    ))}
+                    {/* Grid lines - vertical */}
+                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => (
+                        <line
+                            key={`v-${p}`}
+                            x1={padding + p * chartWidth}
+                            y1={padding}
+                            x2={padding + p * chartWidth}
+                            y2={height - padding}
+                            stroke="#e0e0e0"
+                            strokeWidth="1"
+                        />
+                    ))}
+                    {/* Y-axis labels */}
+                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => {
+                        const val = maxVal - p * range;
+                        return (
+                            <text
+                                key={`yl-${p}`}
+                                x={padding - 10}
+                                y={padding + p * chartHeight + 5}
+                                textAnchor="end"
+                                fontSize="11"
+                                fill="#666"
+                            >
+                                {val.toFixed(0)}
+                            </text>
+                        );
+                    })}
+                    {/* X-axis labels */}
+                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => {
+                        const idx = Math.floor(p * (samples.length - 1));
+                        return (
+                            <text
+                                key={`xl-${p}`}
+                                x={padding + p * chartWidth}
+                                y={height - padding + 20}
+                                textAnchor="middle"
+                                fontSize="11"
+                                fill="#666"
+                            >
+                                {idx}
+                            </text>
+                        );
+                    })}
+                    {/* Main line */}
+                    <polyline
+                        points={pointsString}
+                        fill="none"
+                        stroke="#ff6b6b"
+                        strokeWidth="2"
+                        strokeLinejoin="round"
+                        strokeLinecap="round"
                     />
-                ))}
-                {/* Grid lines - vertical */}
-                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => (
-                    <line
-                        key={`v-${p}`}
-                        x1={padding + p * chartWidth}
-                        y1={padding}
-                        x2={padding + p * chartWidth}
-                        y2={height - padding}
-                        stroke="#e0e0e0"
-                        strokeWidth="1"
-                    />
-                ))}
-                {/* Y-axis labels */}
-                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => {
-                    const val = maxVal - p * range;
-                    return (
-                        <text
-                            key={`yl-${p}`}
-                            x={padding - 10}
-                            y={padding + p * chartHeight + 5}
-                            textAnchor="end"
-                            fontSize="11"
-                            fill="#666"
-                        >
-                            {val.toFixed(0)}
-                        </text>
-                    );
-                })}
-                {/* X-axis labels */}
-                {[0, 0.2, 0.4, 0.6, 0.8, 1].map(p => {
-                    const idx = Math.floor(p * (samples.length - 1));
-                    return (
-                        <text
-                            key={`xl-${p}`}
-                            x={padding + p * chartWidth}
-                            y={height - padding + 20}
-                            textAnchor="middle"
-                            fontSize="11"
-                            fill="#666"
-                        >
-                            {idx}
-                        </text>
-                    );
-                })}
-                {/* Main line */}
-                <polyline
-                    points={pointsString}
-                    fill="none"
-                    stroke="#ff6b6b"
-                    strokeWidth="2"
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                />
-                {/* Data points (show every 5th point to avoid clutter) */}
-                {points.filter((_, i) => i % 5 === 0 || i === points.length - 1).map((p, i) => (
-                    <circle
-                        key={i}
-                        cx={p.x}
-                        cy={p.y}
-                        r="3"
-                        fill="#ff6b6b"
-                        stroke="white"
-                        strokeWidth="1"
-                    />
-                ))}
-                {/* Start and end labels */}
-                <text x={padding} y={padding - 10} fontSize="12" fill="#666">Start</text>
-                <text x={width - padding} y={padding - 10} fontSize="12" fill="#666" textAnchor="end">End</text>
-            </svg>
+                    {/* Data points (show every 5th point to avoid clutter) */}
+                    {points.filter((_, i) => i % 5 === 0 || i === points.length - 1).map((p, i) => (
+                        <circle
+                            key={i}
+                            cx={p.x}
+                            cy={p.y}
+                            r="3"
+                            fill="#ff6b6b"
+                            stroke="white"
+                            strokeWidth="1"
+                        />
+                    ))}
+                    {/* Hover indicator line */}
+                    {hoverData && (
+                        <line
+                            x1={hoverData.x}
+                            y1={padding}
+                            x2={hoverData.x}
+                            y2={height - padding}
+                            stroke="#666"
+                            strokeWidth="1"
+                            strokeDasharray="4"
+                        />
+                    )}
+                    {/* Hover indicator circle */}
+                    {hoverData && (
+                        <circle
+                            cx={hoverData.x}
+                            cy={hoverData.y}
+                            r="6"
+                            fill="#ff6b6b"
+                            stroke="white"
+                            strokeWidth="2"
+                        />
+                    )}
+                    {/* Start and end labels */}
+                    <text x={padding} y={padding - 10} fontSize="12" fill="#666">Start</text>
+                    <text x={width - padding} y={padding - 10} fontSize="12" fill="#666" textAnchor="end">End</text>
+                </svg>
+                {/* Tooltip */}
+                {hoverData && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            left: hoverData.screenX + 15,
+                            top: hoverData.screenY - 10,
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            color: 'white',
+                            padding: '8px 12px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            pointerEvents: 'none',
+                            zIndex: 1000,
+                            whiteSpace: 'nowrap'
+                        }}
+                    >
+                        <div><strong>Value:</strong> {hoverData.value}</div>
+                        <div><strong>Smoothed:</strong> {hoverData.smoothedValue.toFixed(2)}</div>
+                        <div><strong>Sample Index:</strong> {hoverData.index}</div>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
